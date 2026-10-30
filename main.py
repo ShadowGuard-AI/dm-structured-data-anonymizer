@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 import re
 import logging
 import random
+import sys
 from faker import Faker
 import os
 
@@ -130,6 +131,12 @@ class DataAnonymizer:
         Returns:
             dict: The anonymized data.
         """
+        # Top-level JSON is often a list of records (the examples at the
+        # bottom of this file show exactly that shape), not one object.
+        # Recursing into list items keeps that input working instead of
+        # failing on data.items().
+        if isinstance(data, list):
+            return [self._anonymize_data(item, config) for item in data]
         anonymized_data = {}
         for key, value in data.items():
             rule = config.get(key)
@@ -225,7 +232,7 @@ def main():
                 except json.JSONDecodeError as e:
                     logging.error(f"Error decoding JSON from input file: {e}")
                     print(f"Error decoding JSON from input file: {e}")
-                    return
+                    sys.exit(1)
             elif args.format == 'csv':
                 reader = csv.DictReader(f)
                 data = list(reader)
@@ -235,7 +242,7 @@ def main():
                 anonymized_data = anonymizer.anonymize_xml(xml_string)
             else:
                 print("Unsupported format.")
-                return
+                sys.exit(1)
 
         with open(args.output_file, 'w') as f:
             if args.format == 'json':
@@ -245,6 +252,12 @@ def main():
                     writer = csv.DictWriter(f, fieldnames=anonymized_data[0].keys())
                     writer.writeheader()
                     writer.writerows(anonymized_data)
+                else:
+                    # An empty input still gets its header row, so the
+                    # output stays a valid CSV with the same columns
+                    # instead of a zero byte file.
+                    writer = csv.DictWriter(f, fieldnames=reader.fieldnames or [])
+                    writer.writeheader()
             elif args.format == 'xml':
                 f.write(anonymized_data)
 
@@ -254,9 +267,14 @@ def main():
     except FileNotFoundError as e:
         logging.error(e)
         print(e)
+        # Exit non-zero on failure. Every error path in main used to
+        # return normally, so a missing input file or an unparseable
+        # JSON document still reported success to the shell.
+        sys.exit(1)
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
