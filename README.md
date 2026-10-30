@@ -1,3 +1,5 @@
+![Banner](banner.png)
+
 # dm-structured-data-anonymizer
 Anonymizes structured data formats (JSON, CSV, XML) by applying configurable masking rules to specific fields based on field name or regex pattern matching. Supports loading rules from a configuration file. - Focused on Tools designed to generate or mask sensitive data with realistic-looking but meaningless values
 
