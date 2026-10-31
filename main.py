@@ -8,6 +8,10 @@ import random
 import sys
 from faker import Faker
 import os
+from pathlib import Path
+
+class UnsafeRuleError(ValueError):
+    pass
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,6 +30,7 @@ class DataAnonymizer:
         """
         self.config = self._load_config(config_file) if config_file else {}
         self.fake = Faker()
+        self.replacement_count = 0
 
     def _load_config(self, config_file):
         """
@@ -116,6 +121,7 @@ class DataAnonymizer:
             if child.tag in config:
                 rule = config[child.tag]
                 child.text = self._apply_masking_rule(rule)
+                self.replacement_count += 1
             self._anonymize_xml_element(child, config)
 
 
@@ -137,11 +143,18 @@ class DataAnonymizer:
         # failing on data.items().
         if isinstance(data, list):
             return [self._anonymize_data(item, config) for item in data]
+        if not isinstance(data, dict):
+            return data
         anonymized_data = {}
         for key, value in data.items():
             rule = config.get(key)
             if rule:
                 anonymized_data[key] = self._apply_masking_rule(rule)
+                self.replacement_count += 1
+            elif isinstance(value, dict):
+                anonymized_data[key] = self._anonymize_data(value, config)
+            elif isinstance(value, list):
+                anonymized_data[key] = [self._anonymize_data(item, config) if isinstance(item, (dict, list)) else item for item in value]
             else:
                 anonymized_data[key] = value  # Keep original value if no rule is defined
         return anonymized_data
@@ -161,8 +174,10 @@ class DataAnonymizer:
                 fake_attribute = rule[5:]
                 return str(getattr(self.fake, fake_attribute)())
             elif rule.startswith("random."):
-                # Execute random function using eval (use with caution!)
-                return str(eval(rule))
+                match = re.fullmatch(r"random\.randint\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)", rule)
+                if not match:
+                    raise UnsafeRuleError(f"Unsupported random rule: {rule}. Only random.randint with two integer bounds is allowed.")
+                return str(random.randint(int(match.group(1)), int(match.group(2))))
             elif rule == "null":
                 return None  # Or use "null" string representation
             elif rule.startswith("regex:"):
@@ -171,6 +186,8 @@ class DataAnonymizer:
                 return self._generate_masked_value_from_regex(regex_pattern)
             else:
                 return rule  # Use the rule as a literal value
+        except UnsafeRuleError:
+            raise
         except Exception as e:
             logging.error(f"Error applying masking rule '{rule}': {e}")
             return "[MASKING_ERROR]"  # Return an error indicator
@@ -221,6 +238,9 @@ def main():
     parser = setup_argparse()
     args = parser.parse_args()
 
+    if Path(args.input_file).resolve() == Path(args.output_file).resolve():
+        print("Error: Output file must not be the same as the input file.")
+        sys.exit(1)
     try:
         anonymizer = DataAnonymizer(args.config)
 
@@ -244,6 +264,10 @@ def main():
                 print("Unsupported format.")
                 sys.exit(1)
 
+        if getattr(anonymizer, "replacement_count", 0) == 0:
+            logging.error("No fields anonymized.")
+            print("No fields anonymized.")
+            sys.exit(1)
         with open(args.output_file, 'w') as f:
             if args.format == 'json':
                 json.dump(anonymized_data, f, indent=4)
