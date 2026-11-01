@@ -117,6 +117,13 @@ class DataAnonymizer:
             element (xml.etree.ElementTree.Element): The XML element to anonymize.
             config (dict): Anonymization rules.
         """
+        # XML is narrower than JSON here in two ways I keep visible: only
+        # element text is ever replaced, never an attribute, so a value in
+        # an attribute named in the config sails through untouched; and the
+        # root element itself is never tested against the config, only its
+        # descendants are. Replacing the text of an element that has child
+        # elements leaves those children in place, and the recursion still
+        # visits them after the parent's text has been swapped.
         for child in element:
             if child.tag in config:
                 rule = config[child.tag]
@@ -147,6 +154,13 @@ class DataAnonymizer:
             return data
         anonymized_data = {}
         for key, value in data.items():
+            # A rule matches on the key name alone, at any depth, and the
+            # rule check comes before the recursion below: a ruled key whose
+            # value is a whole nested object is replaced by one flat masking
+            # value, and the structure under it is gone. The count also goes
+            # up whatever _apply_masking_rule returns, including its
+            # [MASKING_ERROR] fallback, so the count in main measures rules
+            # attempted, not values successfully hidden.
             rule = config.get(key)
             if rule:
                 anonymized_data[key] = self._apply_masking_rule(rule)
@@ -185,6 +199,13 @@ class DataAnonymizer:
                 regex_pattern = rule[6:]
                 return self._generate_masked_value_from_regex(regex_pattern)
             else:
+                # Any rule string that is not fake., random., null, or
+                # regex: is not an error: it becomes the replacement itself,
+                # stamped identically on every matching field in the file.
+                # A typo in a config therefore does not fail the run; it
+                # quietly turns a column into one repeated constant, which
+                # can be the intent or can be a config mistake that looks
+                # exactly like the intent in the output.
                 return rule  # Use the rule as a literal value
         except UnsafeRuleError:
             raise
